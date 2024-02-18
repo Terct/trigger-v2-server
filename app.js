@@ -7,7 +7,7 @@ require('dotenv').config();
 const moment = require('moment-timezone');
 const fs = require('fs').promises;
 const axios = require('axios');
-const { profile } = require('console');
+const { profile, Console } = require('console');
 const cheerio = require('cheerio');
 
 
@@ -63,6 +63,47 @@ function htmlToJSON(html) {
 
 }
 
+function corrgirNumero(number) {
+
+  // Converta o número para uma string
+  let telefoneString = number.toString();
+
+  // Variável que armazenará o número de telefone modificado
+  let numeroTelefone;
+
+  if (/^55/.test(telefoneString) && telefoneString.length === 13) {
+    numeroTelefone = telefoneString.slice(0, 4) + telefoneString.slice(5);
+  }
+  // Verifica se o número começa com "55" ou "+55" e tem 12 caracteres, mantenha-o inalterado
+  else if (/^55/.test(telefoneString) && telefoneString.length === 12) {
+    numeroTelefone = telefoneString;
+  }
+  // Verifica se o número começa com "55" ou "+55" e tem 11 caracteres, mantenha-o inalterado
+  else if (/^55/.test(telefoneString) && telefoneString.length === 11) {
+    numeroTelefone = telefoneString;
+  }
+  // Verifica se o número começa com "55" ou "+55" e tem menos de 11 caracteres, adicione o quinto dígito
+  else if (/^55/.test(telefoneString) && telefoneString.length < 12) {
+    numeroTelefone = telefoneString.slice(0, 4) + '9' + telefoneString.slice(4);
+  }
+  // Adiciona "55" no início se o número não começar com "55" ou "+55" e tem 10 caracteres
+  else if (telefoneString.length === 10) {
+    numeroTelefone = '55' + telefoneString;
+  }
+  // Adiciona "55" no início e renova o quinto dígito se o número não começar com "55" ou "+55" e tem 11 caracteres
+  else if (telefoneString.length === 11) {
+    numeroTelefone = '55' + telefoneString.slice(1, 5) + '9' + telefoneString.slice(5);
+  }
+  // Se o número não corresponder a nenhum caso acima, atribua o número de telefone original
+  else {
+    numeroTelefone = telefoneString;
+
+  }
+
+  return numeroTelefone
+
+}
+
 async function saveLog(userId, name, telephone, triggerStatus, error, contentError, contentMessage, shippingTime, typeTrigger) {
   try {
     // Insira aqui o código para acessar a tabela dp-v2-logs e criar uma nova linha com os parâmetros fornecidos
@@ -101,7 +142,7 @@ app.post('/webhook-test-event/', async (req, res) => {
     const evolutionKey = process.env.EVOLUTION_API_KEY;
 
 
-    const { webhookId, number, messageType, messageSelected, instance } = req.body;
+    const { webhookId, number, messageType, typebotUrl, variablesTypebot, selectedVariblesTypebot, messageSelected, instance } = req.body;
 
     // Consultar a tabela dp-v2-users para obter dados associados ao user_id
     const { data: userData, error: userError } = await supabase
@@ -113,13 +154,14 @@ app.post('/webhook-test-event/', async (req, res) => {
     // Verificar se a consulta retornou resultados
     if (userData) {
 
+      //console.log(messageType)
 
-      if (messageType === "Mensagem") {
+      if (messageType === "mensagem") {
 
         const message = htmlToJSON(messageSelected);
 
         //console.log(message)
-
+        // Filtrar as variáveis selecionadas
 
         try {
           // Se fluxo for igual a false, fazer a requisição Axios
@@ -152,6 +194,84 @@ app.post('/webhook-test-event/', async (req, res) => {
           throw axiosError; // Rejeitar o erro para o bloco catch externo
 
         }
+
+
+      } else {
+
+        urlAxios = `${evolutionUrl}/typebot/start/`
+
+        // Filtrar as variáveis selecionadas
+        const filteredVariables = variablesTypebot
+          .filter(variable => selectedVariblesTypebot.includes(variable.label))
+          .map(({ label, value }) => ({ name: label, value }));
+
+
+        //console.log(filteredVariables)
+
+        try {
+          const instanceResponse = await axios.get(`${evolutionUrl}/instance/fetchInstances?instanceName=${instance}`, {
+            headers: {
+              'Content-Type': 'application/json',
+              'apikey': evolutionKey
+            }
+          });
+
+          const instanceData = instanceResponse.data.instance;
+
+          // Verificar se o status é "open" antes de prosseguir com a requisição POST
+          if (instanceData.status === 'open') {
+            // Continuar com a requisição POST
+            try {
+
+              var numeroTelefone = corrgirNumero(number)
+              // Exibe o número de telefone modificado
+              //console.log(numeroTelefone);
+
+              var typebotUrlBot = typebotUrl.split("/")[2];
+              var typebotBot = typebotUrl.split("/")[3];
+
+              // Requisição Axios POST
+              const response = await axios.post(`${evolutionUrl}/typebot/start/${instance}`, {
+                url: `https://${typebotUrlBot}`,
+                typebot: typebotBot,
+                expire: 1,
+                remoteJid: `${numeroTelefone}@s.whatsapp.net`,
+                startSession: true,
+                variables: filteredVariables
+              },
+                {
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'apikey': evolutionKey
+                  }
+                });
+
+              console.log('Resposta da requisição:', response.data);
+              res.status(200).json(response.data);
+
+            } catch (error) {
+              console.error('Erro na requisição POST:', error.response.data);
+
+
+              res.status(500).json('Error Desconhecido');
+
+            }
+          } else {
+            console.log(`A instância ${line} não está no status 'open'. Pulando para a próxima instância.`);
+            // Adicionar lógica para lidar com instâncias que não estão no status 'open'
+
+            // Pode adicionar lógica de tratamento de erro ou tomar outras ações necessárias
+
+            res.status(400).json('Instância não está no status "open"');
+          }
+        } catch (error) {
+          console.error('Erro na requisição GET da instância:', error.response.data);
+
+          // Adicionar lógica de tratamento de erro para a requisição GET
+
+          res.status(500).json('Error Desconhecido');
+        }
+
 
 
       }
@@ -190,10 +310,10 @@ app.post('/webhook/:webhookId', async (req, res) => {
       var lastLine = userData.last_line
       const counter_erros = userData.counter_critical_error
       const typeShot = userData.user_profile.triggerForEventos.labelTypeOfShot
-      const typeMessage = userData.user_profile.triggerForEventos.labelMessageType
       var loop = false
       var line;
       var urlAxios;
+      var bodyAxios;
 
       var selectedEvents = userData.user_profile.triggerForEventos.eventsSelecteds
 
@@ -214,14 +334,9 @@ app.post('/webhook/:webhookId', async (req, res) => {
           line = userData.user_profile.triggerForEventos.lineSelected
         }
 
-        if (typeMessage === "Mensagem") {
-          urlAxios = `${evolutionUrl}/message/sendText/`
-        } else {
-          urlAxios = `${evolutionUrl}/typebot/start/`
-        }
-
         // Array para armazenar informações dos itens que correspondem à condição
         const matchedItems = [];
+
 
         // Loop através dos eventos
         for (let i = 0; i < events.length; i++) {
@@ -230,6 +345,11 @@ app.post('/webhook/:webhookId', async (req, res) => {
           const conditionValue = event.conditionValue;
           let number = event.number;
           let text = event.text;
+          let typebotUrl = event.typebotUrl;
+          let selectedVariavles = event.selectedVariavles;
+          let typeMessage = event.typeTrigger;
+
+          console.log(typebotUrl, selectedVariavles, typeMessage)
 
           // Se o texto contiver variáveis delimitadas por chaves, substitua-as pelos valores correspondentes no corpo da requisição
           const matches = text.match(/{(.*?)}/g);
@@ -256,7 +376,11 @@ app.post('/webhook/:webhookId', async (req, res) => {
               matchedItems.push({
                 index: i,
                 number: number,
-                text: text
+                text: text,
+                typebotUrl: typebotUrl,
+                selectedVariavles: selectedVariavles,
+                typeMessage: typeMessage
+
               });
             } else {
               //console.log(`O valor de ${conditionIdentifier} não é igual a ${conditionValue}`);
@@ -266,7 +390,10 @@ app.post('/webhook/:webhookId', async (req, res) => {
             matchedItems.push({
               index: i,
               number: number,
-              text: text
+              text: text,
+              typebotUrl: typebotUrl,
+              selectedVariavles: selectedVariavles,
+              typeMessage: typeMessage
             });
           } else {
             //console.log(`O corpo da requisição não contém ${conditionIdentifier}`);
@@ -278,11 +405,61 @@ app.post('/webhook/:webhookId', async (req, res) => {
           res.status(200).json({ "Message": "Evento desconhecido" });
           return;
         }
-
         //console.log("Itens que correspondem à condição:", matchedItems);
+
         let messageSelected = htmlToJSON(matchedItems[0].text)
         //console.log(messageSelected)
 
+        if (matchedItems[0].typeMessage === "mensagem") {
+          urlAxios = `${evolutionUrl}/message/sendText/`
+
+          var numeroTelefone = corrgirNumero(matchedItems[0].number)
+
+          bodyAxios = {
+            number: `${numeroTelefone}@s.whatsapp.net`,
+            options: {
+              delay: 1200,
+              presence: 'composing',
+              linkPreview: false
+            },
+            textMessage: {
+              text: messageSelected[0].content
+            }
+          }
+
+
+
+        } else {
+
+          var numeroTelefone = corrgirNumero(matchedItems[0].number)
+
+          var typebotUrlBot = matchedItems[0].typebotUrl.split("/")[2];
+          var typebotBot = matchedItems[0].typebotUrl.split("/")[3];
+         
+
+          // Função para filtrar os valores
+          const filteredValues =  matchedItems[0].selectedVariavles.map(variable => {
+            return {
+              name: variable,
+              value: body[variable] || null
+            };
+          }).filter(item => item.value !== null);
+
+
+          urlAxios = `${evolutionUrl}/typebot/start/`
+
+          bodyAxios = {
+            url: `https://${typebotUrlBot}`,
+            typebot: typebotBot,
+            expire: 1,
+            remoteJid: `${numeroTelefone}@s.whatsapp.net`,
+            startSession: true,
+            variables: filteredValues
+          }
+
+        }
+
+        console.log(bodyAxios)
 
         if (loop) {
 
@@ -305,17 +482,7 @@ app.post('/webhook/:webhookId', async (req, res) => {
             lastLine = nextInstance.instance;
             try {
               console.log(`${urlAxios}${lastLine}`)
-              const response = await axios.post(`${urlAxios}${lastLine}`, {
-                number: `${matchedItems[0].number}@s.whatsapp.net`,
-                options: {
-                  delay: 1200,
-                  presence: 'composing',
-                  linkPreview: false
-                },
-                textMessage: {
-                  text: messageSelected[0].content
-                }
-              }, {
+              const response = await axios.post(`${urlAxios}${lastLine}`, bodyAxios, {
                 headers: {
                   'Content-Type': 'application/json',
                   'apikey': evolutionKey
@@ -391,17 +558,7 @@ app.post('/webhook/:webhookId', async (req, res) => {
 
 
           try {
-            const response = await axios.post(`${urlAxios}${line}`, {
-              number: `${matchedItems[0].number}@s.whatsapp.net`,
-              options: {
-                delay: 1200,
-                presence: 'composing',
-                linkPreview: false
-              },
-              textMessage: {
-                text: messageSelected[0].content
-              }
-            }, {
+            const response = await axios.post(`${urlAxios}${line}`, bodyAxios, {
               headers: {
                 'Content-Type': 'application/json',
                 'apikey': evolutionKey
@@ -951,6 +1108,8 @@ app.post('/triggerItemForList', async (req, res) => {
         else {
           let primaryLine;
 
+          console.log(lastLine)
+
           if (lastLine !== null) {
             primaryLine = line.find(item => item.instance === lastLine).instance;
           } else {
@@ -980,6 +1139,8 @@ app.post('/triggerItemForList', async (req, res) => {
               });
 
               const instanceData = instanceResponse.data.instance;
+
+              console.log(instanceData)
 
               // Verificar se o status é "open" antes de prosseguir com a requisição POST
               if (instanceData.status === 'open') {
